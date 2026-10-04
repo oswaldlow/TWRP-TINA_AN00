@@ -65,6 +65,7 @@ ABL 的 fastboot oem 命令（从 abl.img 解压出的字符串）：没有读�
 | 3 | 11:46 | 同上 + `recovery_vendor` 去掉 11 个 SELinux 文件 | 同样 13 秒回 fastboot | 不只是 SELinux 文件冲突 |
 | 4 | 11:52 | **对照**：原厂 ramdisk（逐字节不变）+ 我们的头/avb footer → `recovery_ramdisk` | 原厂 recovery 正常启动 | **打包方式、分区组合都没问题，问题在 TWRP ramdisk 内容** |
 | 5 | 12:00 | TWRP + vendor 再去掉 `init.recovery.huawei.rc`、`init.recovery.lahaina_64.rc` | 同样 13 秒回 fastboot | critical 服务 `oeminfo_nvm`（seclabel 在 TWRP 策略中不存在）不是唯一原因 |
+| 6 | 12:25 | 方案 A：TWRP + **空的** `recovery_vendor`（只有 cpio TRAILER，gzip 50 字节） | 14 秒回 fastboot | **彻底排除 vendor 覆盖**：TWRP ramdisk 单独启动也失败，问题在 TWRP ramdisk 本身（或它与内核/ABL 的配合） |
 
 每次失败后的恢复：刷回原厂 `recovery_ramdisk`/`recovery_vendor` → 重启 → 原厂 recovery 里点"重启设备"。
 
@@ -76,6 +77,7 @@ ABL 的 fastboot oem 命令（从 abl.img 解压出的字符串）：没有读�
 - SELinux 分离策略（TWRP 无 `plat_sepolicy.cil`，原厂 vendor 无 `vendor/etc/selinux`）
 - TWRP init 依赖缺失（`/system/bin/init` 动态链接，33 个依赖库全部在 ramdisk 内）
 - 只是 recovery_vendor 的 SELinux 文件或华为 rc 脚本（#3、#5 已去除仍失败）
+- recovery_vendor 覆盖整体（#6 vendor 为空仍失败）
 
 ### 时序推断
 
