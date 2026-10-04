@@ -45,14 +45,6 @@ jobs:
           sudo rm -f /mnt/swapfile /swapfile || true
           echo "== after"; df -h / /mnt || true
 
-      - name: Set up swap (6G on /)
-        run: |
-          sudo fallocate -l 6G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          df -h "$GITHUB_WORKSPACE" / ; free -h
-
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -90,6 +82,24 @@ jobs:
           mkdir -p "$dst"
           rsync -a --exclude .git --exclude .github "$GITHUB_WORKSPACE/device-tree/" "$dst/"
           ls -la "$dst"
+
+      # Swap is created only after the sync (the disk-heaviest phase) so it can be
+      # large: soong_build alone needs ~8-10G, the runner has ~8G RAM.
+      # Keep 25G free for out/, cap swap at 16G.
+      - name: Set up swap
+        run: |
+          free_g=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+          swap_g=$(( free_g - 25 ))
+          [ "$swap_g" -gt 16 ] && swap_g=16
+          if [ "$swap_g" -ge 2 ]; then
+            sudo fallocate -l "${swap_g}G" /swapfile
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+            sudo swapon /swapfile
+          else
+            echo "::warning::only ${free_g}G free, no swap created"
+          fi
+          df -h / ; free -h
 
       - name: Build recovery image
         run: |
