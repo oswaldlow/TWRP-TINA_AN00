@@ -8,16 +8,24 @@ write to `reserved2` (112 MB, all zeros on stock, never read by the bootloader):
   offset 0                    whole kernel log, written in RebootSystem()
                               (every reboot path: fatal errors, critical
                               service crashes, normal reboots)
+  offset 16 MiB               live kernel log: a child forked in first stage
+                              rewrites the whole log every 0.3 s for ~3 min,
+                              so a hang (watchdog reset) or panic still leaves
+                              the last kernel messages
   offset 100 MiB + slot*4 KiB stage markers:
       slot 0  FirstStageMain() entry (before /sys is mounted)
       slot 1  first stage, kernel logging initialised
       slot 2  SetupSelinux() entry
+      slot 5  after MountMissingSystemPartitions()
+      slot 6  after ReadPolicy()
+      slot 7  LoadSelinuxPolicy(), right before security_load_policy()
       slot 3  policy loaded, before SelinuxSetEnforcement()
       slot 4  SecondStageMain() entry
 
-Read back from Android:
-    su -c 'dd if=/dev/block/by-name/reserved2 bs=1M count=4'           # kmsg
-    su -c 'dd if=/dev/block/by-name/reserved2 bs=4096 skip=25600 count=8'  # markers
+Read back from Android (build\read_reserved2.ps1 does all of this):
+    su -c 'dd if=/dev/block/by-name/reserved2 bs=1M count=8'               # kmsg at reboot
+    su -c 'dd if=/dev/block/by-name/reserved2 bs=1M skip=16 count=8'       # live kmsg
+    su -c 'dd if=/dev/block/by-name/reserved2 bs=4096 skip=25600 count=16' # markers
 
 Usage: hinova_kmsg_dump.py <path to system/core/init>
 """
@@ -146,6 +154,42 @@ static void HinovaDumpKmsg(const char* why) {
     }
     free(log);
 }
+
+// Fork a child that keeps rewriting the whole kernel log to reserved2 @16 MiB.
+static constexpr off_t kHinovaLiveBase = 16LL * 1024 * 1024;
+
+void HinovaStartKmsgLogger() {
+    pid_t pid = fork();
+    if (pid != 0) return;  // parent, or fork failed
+
+    int size = klogctl(10 /* SYSLOG_ACTION_SIZE_BUFFER */, nullptr, 0);
+    if (size <= 0) size = 4 << 20;
+    char* log = static_cast<char*>(malloc(size));
+    if (log == nullptr) _exit(0);
+    int fd = -1;
+    for (int seq = 0; seq < 600; seq++) {
+        if (fd < 0) fd = HinovaOpenReserved2();
+        if (fd >= 0) {
+            int got = klogctl(3 /* SYSLOG_ACTION_READ_ALL */, log, size);
+            if (got < 0) got = 0;
+            struct timespec ts = {};
+            clock_gettime(CLOCK_BOOTTIME, &ts);
+            char hdr[256];
+            int h = snprintf(hdr, sizeof(hdr),
+                             "HINOVA-KMSG-LIVE v1\nseq=%d boottime=%ld.%03ld len=%d\n\n", seq,
+                             static_cast<long>(ts.tv_sec), ts.tv_nsec / 1000000, got);
+            if (h < 0) h = 0;
+            ssize_t w = 0;
+            w += pwrite(fd, hdr, h, kHinovaLiveBase);
+            w += pwrite(fd, log, got, kHinovaLiveBase + h);
+            w += pwrite(fd, "\nHINOVA-KMSG-END\n", 17, kHinovaLiveBase + h + got);
+            (void)w;
+            fdatasync(fd);
+        }
+        usleep(300 * 1000);
+    }
+    _exit(0);
+}
 // ---- end Hi Nova debug ----
 
 bool IsRebootCapable() {'''
@@ -161,8 +205,9 @@ patch('reboot_utils.cpp', [
 patch('reboot_utils.h', [
     ('void InstallRebootSignalHandlers();\n',
      'void InstallRebootSignalHandlers();\n'
-     '// Hi Nova debug: stage marker in the reserved2 partition.\n'
-     'void HinovaMark(int slot, const char* tag);\n'),
+     '// Hi Nova debug: stage marker / live kernel log in the reserved2 partition.\n'
+     'void HinovaMark(int slot, const char* tag);\n'
+     'void HinovaStartKmsgLogger();\n'),
 ])
 
 patch('first_stage_init.cpp', [
@@ -171,13 +216,23 @@ patch('first_stage_init.cpp', [
      '    HinovaMark(0, "first_stage_entry");\n'),
     ('    LOG(INFO) << "init first stage started!";\n',
      '    LOG(INFO) << "init first stage started!";\n'
-     '    HinovaMark(1, "first_stage_logging");\n'),
+     '    HinovaMark(1, "first_stage_logging");\n'
+     '    HinovaStartKmsgLogger();\n'),
 ])
 
 patch('selinux.cpp', [
     ('int SetupSelinux(char** argv) {\n',
      'int SetupSelinux(char** argv) {\n'
      '    HinovaMark(2, "selinux_setup_entry");\n'),
+    ('    MountMissingSystemPartitions();\n',
+     '    MountMissingSystemPartitions();\n'
+     '    HinovaMark(5, "after_mount_missing");\n'),
+    ('    ReadPolicy(&policy);\n',
+     '    ReadPolicy(&policy);\n'
+     '    HinovaMark(6, "policy_read");\n'),
+    ('    set_selinuxmnt("/sys/fs/selinux");\n',
+     '    set_selinuxmnt("/sys/fs/selinux");\n'
+     '    HinovaMark(7, "before_load_policy");\n'),
     ('    SelinuxSetEnforcement();\n',
      '    HinovaMark(3, "selinux_policy_loaded");\n'
      '    SelinuxSetEnforcement();\n'),

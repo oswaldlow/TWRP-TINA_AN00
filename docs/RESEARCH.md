@@ -66,6 +66,36 @@ ABL 的 fastboot oem 命令（从 abl.img 解压出的字符串）：没有读�
 | 4 | 11:52 | **对照**：原厂 ramdisk（逐字节不变）+ 我们的头/avb footer → `recovery_ramdisk` | 原厂 recovery 正常启动 | **打包方式、分区组合都没问题，问题在 TWRP ramdisk 内容** |
 | 5 | 12:00 | TWRP + vendor 再去掉 `init.recovery.huawei.rc`、`init.recovery.lahaina_64.rc` | 同样 13 秒回 fastboot | critical 服务 `oeminfo_nvm`（seclabel 在 TWRP 策略中不存在）不是唯一原因 |
 | 6 | 12:25 | 方案 A：TWRP + **空的** `recovery_vendor`（只有 cpio TRAILER，gzip 50 字节） | 14 秒回 fastboot | **彻底排除 vendor 覆盖**：TWRP ramdisk 单独启动也失败，问题在 TWRP ramdisk 本身（或它与内核/ABL 的配合） |
+| 7 | 13:23 | **调试版 TWRP**（CI run 8，`debug_kmsg_dump`）+ 空 vendor | 13 秒回 fastboot；reserved2 有标记 0/1/2，**没有 3**，**没有内核日志** | 见下 |
+
+### 实验 7 结果（reserved2）
+
+```
+HINOVA-MARK slot=0 tag=first_stage_entry   pid=1 boottime=2.152
+HINOVA-MARK slot=1 tag=first_stage_logging pid=1 boottime=2.155
+HINOVA-MARK slot=2 tag=selinux_setup_entry pid=1 boottime=2.234
+(slot 3 selinux_policy_loaded 没有；offset 0 的 kmsg dump 为空)
+```
+
+- 内核正常，TWRP 进入了用户空间，**first stage 完整跑完**。
+- **死在 `SetupSelinux()` 里、`SelinuxSetEnforcement()` 之前**。中间依次是：`MountMissingSystemPartitions()` → `SelinuxSetupKernelLogging()` → `ReadPolicy()` → snapuserd → `LoadSelinuxPolicy()`（`security_load_policy`）。
+- `MountMissingSystemPartitions()` 在我们的 fstab 下会立即返回（system 挂在 `/system_root`，找不到 `/system` 就 break）。
+- **没有 kmsg dump** → init 没走到 `RebootSystem()`。普通的 `LOG(FATAL)` 会走到那里，所以更像是**卡死后被看门狗复位，或内核 panic**。时间上：标记 2 在 2.2 秒，整个周期 13 秒，中间约 9–10 秒，像高通 apps watchdog（日志里有 `hh-watchdog`）。
+- 最大嫌疑：`security_load_policy()` 把 TWRP 的策略交给华为内核时出事。两份策略格式相同（policydb v30、MLS、handle_unknown=deny），但 TWRP 的只有 610KB，原厂 1.3MB；内核里有 `hkip`（华为内核完整性保护）。
+- 实验 2（原厂 vendor 叠加，原厂 sepolicy 覆盖 TWRP 的）时，加载的其实是原厂策略，失败点可能在别处（例如 critical 的 `oeminfo_nvm`）。**"保留原厂 SELinux 文件、只删华为 rc 脚本"这个组合还没试过。**
+
+### 实验 8（13:29）：调试版 TWRP + 保留原厂 SELinux、只删华为 rc 的 vendor
+
+- 17 秒回 fastboot（之前都是 13 秒）。
+- reserved2：标记 0/1/2（2.588 / 2.592 / 2.718 秒），**仍然没有 3**，没有 kmsg dump。
+- vendor 叠加后 `/sepolicy` 应为原厂策略，照样卡在同一段 → **不是策略内容的问题**，而是 `SetupSelinux()` 里这几步的执行（`MountMissingSystemPartitions` / `ReadPolicy` / snapuserd / `security_load_policy`）在 TWRP 的 init 下卡住或导致复位。多出的 4 秒可能是原厂策略更大。
+- 下一步：更细的标记 + first stage 里起一个后台子进程每 0.3 秒把 kmsg 写到 reserved2 偏移 16MiB（拿到卡死/panic 前最后的内核日志）。
+
+### 操作注意
+
+- 清零 reserved2 的标记区要 `conv=notrunc`（toybox dd 带 seek 时会截断，块设备上报 Permission denied）：
+  `dd if=/dev/zero of=/dev/block/by-name/reserved2 bs=4096 seek=25600 count=16 conv=notrunc`
+- 手机每次重启后 adb 经常掉（offline / 列表为空）：重启 adb server；不行就解锁屏幕看授权框、重新插线。
 
 每次失败后的恢复：刷回原厂 `recovery_ramdisk`/`recovery_vendor` → 重启 → 原厂 recovery 里点"重启设备"。
 
