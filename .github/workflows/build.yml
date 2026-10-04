@@ -1,0 +1,94 @@
+name: Build TWRP (TINA)
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest_branch:
+        description: 'TWRP minimal manifest branch'
+        required: true
+        default: 'twrp-12.1'
+      build_variant:
+        description: 'Build variant'
+        required: true
+        default: 'eng'
+        type: choice
+        options: [eng, userdebug, user]
+
+env:
+  MANIFEST_URL: https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git
+  DEVICE_PATH: device/hinova/TINA
+  DEVICE_NAME: TINA
+
+jobs:
+  build:
+    # 22.04 still ships libncurses5, which the twrp-12.1 prebuilt toolchain needs
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    steps:
+      - name: Maximize build space (merge / and /mnt into the workspace, add swap)
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 4096
+          swap-size-mb: 12288
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git-core gnupg flex bison build-essential zip curl \
+            zlib1g-dev libc6-dev-i386 libncurses5 x11proto-core-dev libx11-dev \
+            lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig \
+            python3 python-is-python3 rsync bc lz4 cpio
+          mkdir -p ~/bin
+          curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o ~/bin/repo
+          chmod a+x ~/bin/repo
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          git config --global user.name  "github-actions"
+          git config --global user.email "github-actions@users.noreply.github.com"
+          df -h "$GITHUB_WORKSPACE"
+
+      - name: Check out device tree
+        uses: actions/checkout@v4
+        with:
+          path: device-tree
+
+      - name: Sync TWRP source
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/twrp" && cd "$GITHUB_WORKSPACE/twrp"
+          repo init --depth=1 -u "$MANIFEST_URL" -b "${{ inputs.manifest_branch }}"
+          repo sync -c -j"$(nproc --all)" --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune
+          df -h .
+
+      - name: Place device tree
+        run: |
+          dst="$GITHUB_WORKSPACE/twrp/$DEVICE_PATH"
+          mkdir -p "$dst"
+          rsync -a --exclude .git --exclude .github "$GITHUB_WORKSPACE/device-tree/" "$dst/"
+          ls -la "$dst"
+
+      - name: Build recovery image
+        run: |
+          cd "$GITHUB_WORKSPACE/twrp"
+          export ALLOW_MISSING_DEPENDENCIES=true
+          source build/envsetup.sh
+          lunch "twrp_${DEVICE_NAME}-${{ inputs.build_variant }}"
+          mka recoveryimage -j"$(nproc --all)"
+
+      - name: Collect output
+        run: |
+          out="$GITHUB_WORKSPACE/twrp/out/target/product/$DEVICE_NAME"
+          ls -la "$out"
+          mkdir -p "$GITHUB_WORKSPACE/release"
+          cp "$out/recovery.img" "$GITHUB_WORKSPACE/release/twrp-${DEVICE_NAME}-$(date +%Y%m%d).img"
+          sha256sum "$GITHUB_WORKSPACE"/release/*.img
+
+      - name: Upload recovery image
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-${{ env.DEVICE_NAME }}
+          path: ${{ github.workspace }}/release/*.img
+          if-no-files-found: error

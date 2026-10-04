@@ -1,0 +1,19 @@
+# Hi nova 9 Pro (TINA-AN00) recovery init
+# Based on the stock init.recovery.qcom.rc from recovery.img.
+
+on init
+    write /sys/class/backlight/panel0-backlight/brightness 200
+    setprop sys.usb.configfs 1
+
+on fs
+    # Stock cmdline has no androidboot.bootdevice; UFS controller is 1d84000.ufshc
+    # (ro.boot.boot_devices=soc/1d84000.ufshc).
+    wait /dev/block/platform/soc/1d84000.ufshc
+    symlink /dev/block/platform/soc/1d84000.ufshc /dev/block/bootdevice
+
+on property:ro.boot.usbcontroller=*
+    setprop sys.usb.controller ${ro.boot.usbcontroller}
+    write /sys/class/udc/${ro.boot.usbcontroller}/device/../mode peripheral
+
+on boot
+    setprop sys.usb.config adb
