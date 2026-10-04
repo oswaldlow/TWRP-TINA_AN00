@@ -83,11 +83,29 @@ ABL 的 fastboot oem 命令（从 abl.img 解压出的字符串）：没有读�
 
 ## 6. 下一步：调试版 TWRP
 
-`.github/patches/hinova_kmsg_dump.py`：在 TWRP init 的 `RebootSystem()` 开头把整个内核日志写入 **`reserved2`** 分区（112MB，原厂全零，ABL 从不读取）。workflow 开关 `debug_kmsg_dump`。失败后回系统用：
+`.github/patches/hinova_kmsg_dump.py`（workflow 开关 `debug_kmsg_dump`）往 **`reserved2`** 分区（112MB，原厂全零，ABL 从不读取）留痕迹：
+
+| 偏移 | 内容 |
+|---|---|
+| 0 | 整个内核日志，在 `RebootSystem()` 开头写入（致命错误、critical 服务、普通重启都会经过） |
+| 100MiB + 0K | 标记 0：`FirstStageMain()` 入口（/sys 未挂载，用固定设备号 259:20） |
+| 100MiB + 4K | 标记 1：first stage 日志就绪 |
+| 100MiB + 8K | 标记 2：`SetupSelinux()` 入口 |
+| 100MiB + 12K | 标记 3：策略已加载、`SelinuxSetEnforcement()` 之前 |
+| 100MiB + 16K | 标记 4：`SecondStageMain()` 入口 |
+
+判读：一个标记都没有 → 没进用户空间（内核/ramdisk 问题）；停在某个标记 → 死在下一阶段。
+
+失败后回系统读取：
 
 ```sh
-su -c 'dd if=/dev/block/by-name/reserved2 bs=1M count=4' > dump.bin
+su -c 'dd if=/dev/block/by-name/reserved2 bs=1M count=4' > kmsg.bin
+su -c 'dd if=/dev/block/by-name/reserved2 bs=4096 skip=25600 count=8' > marks.bin
 ```
+
+补丁已在服务器上对 TWRP android-12.1 的真实源码验证：5 个文件全部打上，辅助代码 `-Wall -Wextra -Werror` 编译通过。
+
+并行的方案 A：`recovery_vendor` 刷成只有 cpio 结束标记的空 ramdisk，彻底排除 vendor 覆盖。
 
 实验后把 `reserved2` 清零（原厂就是全零）。
 

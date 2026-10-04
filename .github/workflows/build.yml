@@ -88,12 +88,12 @@ jobs:
           rsync -a --exclude .git --exclude .github "$GITHUB_WORKSPACE/device-tree/" "$dst/"
           ls -la "$dst"
 
-      - name: Apply debug patch (kmsg dump to reserved2)
+      - name: Apply debug patch (kmsg dump + stage markers to reserved2)
         if: ${{ inputs.debug_kmsg_dump }}
         run: |
           python3 "$GITHUB_WORKSPACE/device-tree/.github/patches/hinova_kmsg_dump.py" \
-            "$GITHUB_WORKSPACE/twrp/system/core/init/reboot_utils.cpp"
-          grep -n "HinovaDumpKmsg" "$GITHUB_WORKSPACE/twrp/system/core/init/reboot_utils.cpp"
+            "$GITHUB_WORKSPACE/twrp/system/core/init"
+          grep -rn "HinovaMark\|HinovaDumpKmsg" "$GITHUB_WORKSPACE/twrp/system/core/init" | grep -v "^.*://"
 
       # Swap is created only after the sync (the disk-heaviest phase) so it can be
       # large: soong_build alone needs ~8-10G, the runner has ~8G RAM.
