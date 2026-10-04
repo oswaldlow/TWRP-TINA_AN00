@@ -13,6 +13,11 @@ on:
         default: 'eng'
         type: choice
         options: [eng, userdebug, user]
+      debug_kmsg_dump:
+        description: 'Debug: init writes the kernel log to the reserved2 partition before every reboot'
+        required: false
+        default: false
+        type: boolean
 
 env:
   MANIFEST_URL: https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git
@@ -83,6 +88,13 @@ jobs:
           rsync -a --exclude .git --exclude .github "$GITHUB_WORKSPACE/device-tree/" "$dst/"
           ls -la "$dst"
 
+      - name: Apply debug patch (kmsg dump to reserved2)
+        if: ${{ inputs.debug_kmsg_dump }}
+        run: |
+          python3 "$GITHUB_WORKSPACE/device-tree/.github/patches/hinova_kmsg_dump.py" \
+            "$GITHUB_WORKSPACE/twrp/system/core/init/reboot_utils.cpp"
+          grep -n "HinovaDumpKmsg" "$GITHUB_WORKSPACE/twrp/system/core/init/reboot_utils.cpp"
+
       # Swap is created only after the sync (the disk-heaviest phase) so it can be
       # large: soong_build alone needs ~8-10G, the runner has ~8G RAM.
       # Keep 25G free for out/, cap swap at 16G.
@@ -114,12 +126,14 @@ jobs:
           out="$GITHUB_WORKSPACE/twrp/out/target/product/$DEVICE_NAME"
           ls -la "$out"
           mkdir -p "$GITHUB_WORKSPACE/release"
-          cp "$out/recovery.img" "$GITHUB_WORKSPACE/release/twrp-${DEVICE_NAME}-$(date +%Y%m%d).img"
+          suffix=""
+          [ "${{ inputs.debug_kmsg_dump }}" = "true" ] && suffix="-kmsgdump"
+          cp "$out/recovery.img" "$GITHUB_WORKSPACE/release/twrp-${DEVICE_NAME}-$(date +%Y%m%d)${suffix}.img"
           sha256sum "$GITHUB_WORKSPACE"/release/*.img
 
       - name: Upload recovery image
         uses: actions/upload-artifact@v4
         with:
-          name: twrp-${{ env.DEVICE_NAME }}
+          name: twrp-${{ env.DEVICE_NAME }}${{ inputs.debug_kmsg_dump && '-kmsgdump' || '' }}
           path: ${{ github.workspace }}/release/*.img
           if-no-files-found: error
