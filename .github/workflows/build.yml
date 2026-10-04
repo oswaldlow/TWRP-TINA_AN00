@@ -25,8 +25,8 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 360
     steps:
-      # Must run before maximize-build-space: it can only pool space that is
-      # already free on / when it builds the LVM volume.
+      # These runners have no separate /mnt temp disk (it sits on /dev/root),
+      # so there is nothing to pool with LVM: free space on / and build there.
       - name: Free disk space
         run: |
           echo "== before"; df -h / /mnt || true
@@ -45,20 +45,13 @@ jobs:
           sudo rm -f /mnt/swapfile /swapfile || true
           echo "== after"; df -h / /mnt || true
 
-      - name: Maximize build space (merge / and /mnt into the workspace, add swap)
-        uses: easimon/maximize-build-space@master
-        with:
-          root-reserve-mb: 3072
-          temp-reserve-mb: 100
-          swap-size-mb: 6144
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
-          remove-codeql: 'true'
-          remove-docker-images: 'true'
-
-      - name: Show build space
-        run: df -h "$GITHUB_WORKSPACE" / ; free -h
+      - name: Set up swap (6G on /)
+        run: |
+          sudo fallocate -l 6G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          df -h "$GITHUB_WORKSPACE" / ; free -h
 
       - name: Install build dependencies
         run: |
