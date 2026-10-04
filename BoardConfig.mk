@@ -77,10 +77,12 @@ TARGET_COPY_OUT_VENDOR := vendor
 TARGET_COPY_OUT_ODM := odm
 
 # Dynamic partitions (from stock super LP metadata: single "default" group,
-# block device size 8145338368)
+# block device size 8145338368; logical partitions: system hw_product cust vendor odm)
+# The build only accepts standard partition names here. hw_product and cust are
+# still mounted in recovery via the "logical" flag in recovery.fstab.
 BOARD_SUPER_PARTITION_SIZE := 8145338368
 BOARD_SUPER_PARTITION_GROUPS := hinova_dynamic_partitions
-BOARD_HINOVA_DYNAMIC_PARTITIONS_PARTITION_LIST := system hw_product cust vendor odm
+BOARD_HINOVA_DYNAMIC_PARTITIONS_PARTITION_LIST := system vendor odm
 BOARD_HINOVA_DYNAMIC_PARTITIONS_SIZE := 8141144064
 
 # Recovery

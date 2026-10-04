@@ -20,9 +20,3 @@ PRODUCT_PACKAGES += \
 # Soong namespaces
 PRODUCT_SOONG_NAMESPACES += \
     $(LOCAL_PATH)
-
-# Recovery props
-PRODUCT_PROPERTY_OVERRIDES += \
-    ro.product.device=TS-TINA-Q \
-    ro.build.product=TINA \
-    ro.boot.boot_devices=soc/1d84000.ufshc
