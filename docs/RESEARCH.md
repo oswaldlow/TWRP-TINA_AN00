@@ -91,6 +91,30 @@ HINOVA-MARK slot=2 tag=selinux_setup_entry pid=1 boottime=2.234
 - vendor 叠加后 `/sepolicy` 应为原厂策略，照样卡在同一段 → **不是策略内容的问题**，而是 `SetupSelinux()` 里这几步的执行（`MountMissingSystemPartitions` / `ReadPolicy` / snapuserd / `security_load_policy`）在 TWRP 的 init 下卡住或导致复位。多出的 4 秒可能是原厂策略更大。
 - 下一步：更细的标记 + first stage 里起一个后台子进程每 0.3 秒把 kmsg 写到 reserved2 偏移 16MiB（拿到卡死/panic 前最后的内核日志）。
 
+## 7. 原厂 recovery + root adb（14:00 完成，已刷在手机上）
+
+目的：不进系统就能读日志 / dd 分区 / 刷写，后续 GSI 移植也用得上。不用编译，改原厂镜像。
+
+发现：
+- 原厂 `recovery_ramdisk` 自带 `/sbin/adbd`，但华为故意关掉了：configfs 下 adb 的触发条件写成 `sys.usb.configfs=0`，`start adbd` 被注释；平时 USB 设为 `mass_storage`（12d1:1037 虚拟光驱）。
+- 原厂 `recovery_vendor` 的 `init.recovery.huawei.rc` 里有工厂模式 `sys.usb.config=manufacture,adb`：会 `start adbd` 并把 `ffs.adb` 挂到 gadget（12d1:107d）。
+- 原厂 adbd 是 user 编译：**`ro.adb.secure=0` 无效，一定要认证**，recovery 没有授权弹框 → 需要 `/adb_keys`。
+- 原厂 recovery 是 SELinux enforcing、策略在 `recovery_vendor` 的 `/sepolicy`；手机上的 su 不是标准 Magisk（`/data/adb/magisk` 为空），`magiskpolicy` 从 `tools\Kitsune...apk` 的 `lib/arm64-v8a/libmagiskpolicy.so` 取出来用。
+- 原厂 recovery **启动时会清掉 misc 里的 boot-recovery**，所以在里面 `adb reboot` 直接回系统。
+
+改动（逐条编辑 cpio，其余文件与原厂一致，脚本 `build\make_stock_adb.py` + `build\verify_stock_adb.py`）：
+
+| 镜像 | 改动 |
+|---|---|
+| `recovery_ramdisk-adb.img` | `prop.default`：`ro.debuggable=1`、`ro.secure=0`、`ro.adb.secure=0`；新增 `system/etc/init/hinova_adb.rc`（`sys.usb.state=mass_storage` 或 `recovery.load_finish=true` 时 `setprop sys.usb.config manufacture,adb`）；新增 `/adb_keys`（本机 `~/.android/adbkey.pub`） |
+| `recovery_vendor-adb.img` | `sepolicy` 换成 magiskpolicy 打过补丁的版本：`permissive adbd/shell/su/recovery` |
+
+结果：约 24 秒进 recovery，`adb devices` 显示 `recovery`；`id` = `uid=0(root) context=u:r:su:s0`；能 `dd` 读 `reserved2`；`/log` 已挂载；`adb reboot` 21 秒回系统。
+
+两套都保留：原厂未改的在 `images\recovery_ramdisk.img` / `recovery_vendor.img`，adb 版在 `build\stock_adb\`。**手机上当前刷的是 adb 版。**
+
+新的调试循环：刷测试镜像 → 失败掉回 fastboot → 刷 adb 版 recovery_ramdisk/vendor → 自动进 recovery → adb 读 reserved2 → `adb reboot` 回系统。全程不用碰手机。
+
 ### 操作注意
 
 - 清零 reserved2 的标记区要 `conv=notrunc`（toybox dd 带 seek 时会截断，块设备上报 Permission denied）：
