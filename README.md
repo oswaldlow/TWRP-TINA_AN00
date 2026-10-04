@@ -30,17 +30,43 @@ mka recoveryimage
 # output: out/target/product/TINA/recovery.img
 ```
 
-## Test first, then flash
+## Installing (Huawei split recovery)
 
-- Back up the stock `recovery` partition (already in `images\recovery.img`).
-- Flash only the `recovery` partition. Leave `vbmeta`, `recovery_vbmeta`, `boot`,
-  `vendor_boot` and `dtbo` alone.
-- Requires an unlocked bootloader (fastboot reports `FB LockState: UNLOCKED`).
+The `recovery.img` from the build is **not flashed as is**. In recovery mode the
+Huawei bootloader loads three partitions:
 
-## TODO / unverified
+| Partition | Content |
+|---|---|
+| `recovery` | kernel; its header cmdline reaches the kernel → keep the **stock** `recovery.img` |
+| `recovery_ramdisk` | main ramdisk → the TWRP ramdisk (boot header v3, kernel_size 0) |
+| `recovery_vendor` | overlaid **on top of** `recovery_ramdisk` |
 
-- Decryption: disabled. It needs Huawei keymaster / gatekeeper / qseecomd blobs from vendor.
-- Touch: the Huawei TP driver may need firmware from `/vendor/firmware` or `/odm`.
-- `TW_MAX_BRIGHTNESS`: guessed. Read `max_brightness` on the device and fix it.
-- How the Huawei bootloader picks `recovery` vs `recovery_ramdisk` + `recovery_vendor`
-  for recovery boot has not been confirmed.
+Two Huawei-specific constraints (details in [docs/RESEARCH.md](docs/RESEARCH.md)):
+
+- TWRP's own compiled sepolicy **freezes the Huawei kernel** when loaded, and so does any
+  policy that is not fully permissive in the TWRP environment. The kernel also rejects
+  `setenforce 0`. Working setup: the **stock** recovery policy with every type made
+  permissive (`magiskpolicy 'permissive *'`), plus the matching stock `*_contexts`.
+- Touch needs Huawei's THP daemon `aptouch_daemon` from the stock `recovery_vendor`; the
+  two Huawei recovery init scripts in it must be removed (a `critical` oeminfo_nvm service
+  and services that clash with TWRP).
+
+The packaging uses stock Huawei files from the device's own backup, so it is done
+locally and those files are not in this repo:
+
+- `recovery_ramdisk` = TWRP ramdisk + stock policy (permissive) + stock contexts + `/adb_keys`
+- `recovery_vendor` = stock vendor ramdisk − `init.recovery.huawei.rc` − `init.recovery.lahaina_64.rc`,
+  sepolicy replaced by the same permissive policy
+- both keep the stock v3 header page and get an AVB hash footer
+
+Leave `vbmeta`, `recovery_vbmeta`, `boot`, `vendor_boot` and `dtbo` alone.
+Requires an unlocked bootloader (fastboot reports `FB LockState: UNLOCKED`).
+
+## Status
+
+Works: boots to the TWRP UI, touch, USB (MTP + adb over configfs), root adb.
+
+TODO:
+- Decryption of `/data` (FBE v2 + metadata encryption, wrappedkey_v0).
+- MTP shows a driver error on Windows (TWRP's MTP process runs).
+- Find which part of TWRP's policy freezes the kernel (to use a TWRP-built policy).

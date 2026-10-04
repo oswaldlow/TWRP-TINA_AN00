@@ -49,8 +49,10 @@ BOARD_BOOT_HEADER_VERSION := 3
 BOARD_KERNEL_PAGESIZE := 4096
 BOARD_KERNEL_BASE := 0x00000000
 BOARD_KERNEL_IMAGE_NAME := Image.gz
+# No androidboot.selinux=permissive: the Huawei kernel rejects setenforce(0)
+# (EINVAL) and init aborts. Only the `recovery` partition header cmdline reaches
+# the kernel (the recovery_ramdisk header cmdline is ignored by the ABL).
 BOARD_KERNEL_CMDLINE := console=ttyMSM0,115200n8 androidboot.hardware=qcom androidboot.console=ttyMSM0 androidboot.memcg=1 lpm_levels.sleep_disabled=1 video=vfb:640x400,bpp=32,memsize=3072000 msm_rtb.filter=0x237 service_locator.enable=1 androidboot.usbcontroller=a600000.dwc3 swiotlb=0 loop.max_part=7 cgroup.memory=nokmem,nosocket pcie_ports=compat loop.max_part=7 iptable_raw.raw_before_defrag=1 ip6table_raw.raw_before_defrag=1 buildvariant=user
-BOARD_KERNEL_CMDLINE += androidboot.selinux=permissive
 BOARD_MKBOOTIMG_ARGS += --header_version $(BOARD_BOOT_HEADER_VERSION)
 BOARD_MKBOOTIMG_ARGS += --pagesize $(BOARD_KERNEL_PAGESIZE)
 
@@ -125,8 +127,11 @@ SELINUX_IGNORE_NEVERALLOWS := true
 TW_THEME := portrait_hdpi
 TW_EXTRA_LANGUAGES := true
 TW_DEFAULT_LANGUAGE := zh_CN
-TW_SCREEN_BLANK_ON_BOOT := true
 TW_INPUT_BLACKLIST := "hbtp_vm"
+# USB is configfs only (no android_usb); init.recovery.qcom.rc has the gadget rules
+TW_EXCLUDE_DEFAULT_USB_INIT := true
+# thermal_zone0 is soc_thermal and reads -274000; zone22 is cpu-0-0-usr
+TW_CUSTOM_CPU_TEMP_PATH := "/sys/class/thermal/thermal_zone22/temp"
 TW_USE_TOOLBOX := true
 TW_INCLUDE_REPACKTOOLS := true
 TW_INCLUDE_RESETPROP := true
@@ -140,10 +145,10 @@ TW_BACKUP_EXCLUSIONS := /data/fonts
 TARGET_USES_MKE2FS := true
 TW_NO_EXFAT_FUSE := true
 
-# Brightness (stock recovery writes panel0-backlight; max level not yet verified on device)
+# Brightness (panel0-backlight max_brightness read in TWRP: 10000)
 TW_BRIGHTNESS_PATH := "/sys/class/backlight/panel0-backlight/brightness"
-TW_MAX_BRIGHTNESS := 2047
-TW_DEFAULT_BRIGHTNESS := 1200
+TW_MAX_BRIGHTNESS := 10000
+TW_DEFAULT_BRIGHTNESS := 4000
 
 # Debug
 TWRP_INCLUDE_LOGCAT := true
